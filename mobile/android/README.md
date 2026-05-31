@@ -16,8 +16,8 @@ should preserve the same sync rules when added.
 ## Build
 
 ```bash
-gradle -p mobile/android :app:assembleDebug
+just mobile-build
 ```
 
-Requires an Android SDK, either through `ANDROID_HOME` or
-`mobile/android/local.properties` with `sdk.dir=/path/to/sdk`.
+`ANDROID_HOME` defaults to `/opt/homebrew/share/android-commandlinetools`.
+Override `ANDROID_HOME` if the SDK lives elsewhere.

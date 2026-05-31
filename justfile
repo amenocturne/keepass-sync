@@ -28,7 +28,7 @@ lint:
 
 # Build Android app
 mobile-build:
-    gradle -p mobile/android :app:assembleDebug
+    cd mobile/android; ANDROID_HOME="${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}" ./gradlew assembleDebug
 
 # Remove build artifacts
 clean:
