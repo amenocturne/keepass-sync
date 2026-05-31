@@ -1,3 +1,4 @@
+use std::env;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -23,6 +24,9 @@ pub enum KeepassxcError {
 }
 
 impl Keepassxc {
+    pub const ENV_BINARY: &'static str = "KEEPASS_SYNC_KEEPASSXC_CLI";
+    pub const SIDECAR_RELATIVE_PATH: &'static str = "tools/keepassxc/bin/keepassxc-cli";
+
     pub fn new(binary: impl Into<PathBuf>) -> Self {
         Self {
             binary: binary.into(),
@@ -30,7 +34,29 @@ impl Keepassxc {
     }
 
     pub fn default_binary() -> Self {
-        Self::new("keepassxc-cli")
+        Self::new(Self::resolve_binary())
+    }
+
+    pub fn resolve_binary() -> PathBuf {
+        if let Some(path) = env::var_os(Self::ENV_BINARY).map(PathBuf::from) {
+            return path;
+        }
+
+        let cwd_sidecar = PathBuf::from(Self::SIDECAR_RELATIVE_PATH);
+        if cwd_sidecar.exists() {
+            return cwd_sidecar;
+        }
+
+        if let Ok(exe) = env::current_exe()
+            && let Some(exe_dir) = exe.parent()
+        {
+            let exe_sidecar = exe_dir.join(Self::SIDECAR_RELATIVE_PATH);
+            if exe_sidecar.exists() {
+                return exe_sidecar;
+            }
+        }
+
+        PathBuf::from("keepassxc-cli")
     }
 
     pub fn merge(&self, request: &KeepassMerge) -> Result<(), KeepassxcError> {
@@ -100,3 +126,22 @@ impl std::fmt::Display for KeepassxcError {
 }
 
 impl std::error::Error for KeepassxcError {}
+
+#[cfg(test)]
+mod tests {
+    use super::Keepassxc;
+    use std::path::PathBuf;
+
+    #[test]
+    fn sidecar_path_is_private_to_keepass_sync() {
+        assert_eq!(
+            PathBuf::from(Keepassxc::SIDECAR_RELATIVE_PATH),
+            PathBuf::from("tools/keepassxc/bin/keepassxc-cli")
+        );
+    }
+
+    #[test]
+    fn default_binary_always_resolves_to_a_command() {
+        assert!(!Keepassxc::default().binary().as_os_str().is_empty());
+    }
+}

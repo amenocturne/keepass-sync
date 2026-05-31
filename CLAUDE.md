@@ -39,3 +39,6 @@ just run --help
   from the device base revision.
 - Filesystem transport is the first concrete backend; SSH/SFTP should preserve
   the same transaction semantics instead of changing sync rules.
+- Packaged builds should bundle `keepassxc-cli` under
+  `tools/keepassxc/bin/keepassxc-cli`. Do not rely on or overwrite a system
+  KeePassXC install.

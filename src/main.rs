@@ -182,9 +182,11 @@ fn manifest_command(args: &[String]) -> Result<(), String> {
 }
 
 fn doctor_command() -> Result<(), String> {
-    match Command::new("keepassxc-cli").arg("--version").output() {
+    let keepassxc = Keepassxc::default();
+    match Command::new(keepassxc.binary()).arg("--version").output() {
         Ok(output) if output.status.success() => {
             let version = String::from_utf8_lossy(&output.stdout);
+            println!("keepassxc-cli path: {}", keepassxc.binary().display());
             println!("keepassxc-cli: {}", version.trim());
             Ok(())
         }
@@ -192,7 +194,10 @@ fn doctor_command() -> Result<(), String> {
             let stderr = String::from_utf8_lossy(&output.stderr);
             Err(format!("keepassxc-cli failed: {}", stderr.trim()))
         }
-        Err(error) => Err(format!("keepassxc-cli not available: {error}")),
+        Err(error) => Err(format!(
+            "keepassxc-cli not available at {}: {error}",
+            keepassxc.binary().display()
+        )),
     }
 }
 

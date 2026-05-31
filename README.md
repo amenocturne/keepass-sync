@@ -17,6 +17,20 @@ just build
 just test
 ```
 
+## KeePassXC CLI Sidecar
+
+Desktop merge uses `keepassxc-cli`, but it does not need to come from the
+system PATH. Lookup order:
+
+1. `KEEPASS_SYNC_KEEPASSXC_CLI`
+2. `tools/keepassxc/bin/keepassxc-cli` relative to the current working directory
+3. `tools/keepassxc/bin/keepassxc-cli` relative to the installed `keepass-sync`
+   binary
+4. `keepassxc-cli` from PATH, for development fallback
+
+The packaged app/installer should place the private KeePassXC CLI sidecar under
+`tools/keepassxc/` so it never clashes with a user-installed KeePassXC.
+
 ## Usage
 
 Filesystem-backed sync commands:
