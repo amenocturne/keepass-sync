@@ -22,7 +22,12 @@ just run --help
 - `src/sync.rs` - pure sync decision state machine.
 - `src/revision.rs` - SHA-256 revision values.
 - `src/manifest.rs` - remote manifest format.
+- `src/local_state.rs` - per-device base revision metadata.
+- `src/remote_fs.rs` - filesystem-backed remote transaction implementation.
+- `src/keepassxc.rs` - KeePassXC CLI adapter for desktop merge.
 - `src/main.rs` - CLI boundary.
+- `tests/keepass_sync.rs` - integration tests using real `keepassxc-cli`
+  databases.
 
 ## Key Patterns
 
@@ -32,3 +37,5 @@ just run --help
   desktop merge.
 - Android transport must never overwrite canonical when remote revision differs
   from the device base revision.
+- Filesystem transport is the first concrete backend; SSH/SFTP should preserve
+  the same transaction semantics instead of changing sync rules.

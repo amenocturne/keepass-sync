@@ -1,7 +1,9 @@
-use keepass_sync::{Manifest, Revision, SyncInputs, decide_sync};
+use keepass_sync::{FilesystemRemote, Keepassxc, Manifest, Revision, SyncInputs, decide_sync};
 use std::env;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
+use std::thread;
+use std::time::Duration;
 
 fn main() -> ExitCode {
     match run(env::args().skip(1).collect()) {
@@ -22,6 +24,9 @@ fn run(args: Vec<String>) -> Result<(), String> {
     match command {
         "hash" => hash_command(&args[1..]),
         "decide" => decide_command(&args[1..]),
+        "sync" => sync_command(&args[1..]),
+        "watch" => watch_command(&args[1..]),
+        "merge-incoming" => merge_incoming_command(&args[1..]),
         "manifest" => manifest_command(&args[1..]),
         "doctor" => doctor_command(),
         "help" | "--help" | "-h" => {
@@ -30,6 +35,98 @@ fn run(args: Vec<String>) -> Result<(), String> {
         }
         unknown => Err(format!("unknown command: {unknown}")),
     }
+}
+
+#[derive(Debug, Clone)]
+struct SyncOptions {
+    local: String,
+    remote_root: String,
+    state: String,
+    device: String,
+}
+
+impl SyncOptions {
+    fn from_args(args: &[String]) -> Result<Self, String> {
+        Ok(Self {
+            local: required_value(args, "--local")?,
+            remote_root: required_value(args, "--remote-root")?,
+            state: required_value(args, "--state")?,
+            device: required_value(args, "--device")?,
+        })
+    }
+}
+
+fn sync_command(args: &[String]) -> Result<(), String> {
+    let options = SyncOptions::from_args(args)?;
+    run_sync(&options)
+}
+
+fn run_sync(options: &SyncOptions) -> Result<(), String> {
+    let outcome = FilesystemRemote::new(&options.remote_root)
+        .sync(&options.local, &options.state, &options.device)
+        .map_err(|error| error.to_string())?;
+
+    println!("action: {}", outcome.report.action.as_str());
+    println!("status: {:?}", outcome.report.kind);
+    println!("message: {}", outcome.report.message);
+    if let Some(path) = outcome.report.path {
+        println!("path: {}", path.display());
+    }
+    Ok(())
+}
+
+fn watch_command(args: &[String]) -> Result<(), String> {
+    let options = SyncOptions::from_args(args)?;
+    let interval_seconds = optional_value(args, "--interval-seconds")
+        .map(|value| value.parse::<u64>())
+        .transpose()
+        .map_err(|error| format!("invalid --interval-seconds: {error}"))?
+        .unwrap_or(30);
+    let interval = Duration::from_secs(interval_seconds);
+    let local = PathBuf::from(&options.local);
+    let mut last_seen = std::fs::metadata(&local)
+        .and_then(|metadata| metadata.modified())
+        .map_err(|error| format!("failed to stat local database: {error}"))?;
+
+    run_sync(&options)?;
+
+    loop {
+        thread::sleep(interval);
+        let modified = match std::fs::metadata(&local).and_then(|metadata| metadata.modified()) {
+            Ok(modified) => modified,
+            Err(error) => {
+                eprintln!("watch: failed to stat local database: {error}");
+                continue;
+            }
+        };
+
+        if modified > last_seen {
+            last_seen = modified;
+            if let Err(error) = run_sync(&options) {
+                eprintln!("watch: sync failed: {error}");
+            }
+        }
+    }
+}
+
+fn merge_incoming_command(args: &[String]) -> Result<(), String> {
+    let remote_root = required_value(args, "--remote-root")?;
+    let device = required_value(args, "--device")?;
+    let password = optional_value(args, "--password-file")
+        .map(std::fs::read_to_string)
+        .transpose()
+        .map_err(|error| format!("failed to read password file: {error}"))?
+        .map(|password| password.trim_end_matches(['\r', '\n']).to_string());
+
+    let archived = FilesystemRemote::new(remote_root)
+        .merge_incoming(&device, &Keepassxc::default(), password)
+        .map_err(|error| error.to_string())?;
+
+    println!("merged: {}", archived.len());
+    for path in archived {
+        println!("archived: {}", path.display());
+    }
+    Ok(())
 }
 
 fn hash_command(args: &[String]) -> Result<(), String> {
@@ -111,6 +208,6 @@ fn optional_value(args: &[String], flag: &str) -> Option<String> {
 
 fn print_help() {
     println!(
-        "keepass-sync\n\nCommands:\n  hash <path>\n  decide --local REV [--base REV] [--remote REV]\n  manifest read <path>\n  doctor"
+        "keepass-sync\n\nCommands:\n  hash <path>\n  decide --local REV [--base REV] [--remote REV]\n  sync --local DB --remote-root DIR --state STATE --device ID\n  watch --local DB --remote-root DIR --state STATE --device ID [--interval-seconds N]\n  merge-incoming --remote-root DIR --device ID [--password-file FILE]\n  manifest read <path>\n  doctor"
     );
 }

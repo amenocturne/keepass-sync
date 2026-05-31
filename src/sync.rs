@@ -18,6 +18,23 @@ pub enum SyncAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncExecutionReport {
+    pub kind: SyncReportKind,
+    pub action: SyncAction,
+    pub message: String,
+    pub path: Option<std::path::PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncReportKind {
+    Adopted,
+    IncomingPreserved,
+    Noop,
+    Published,
+    Pulled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncProblem {
     RemoteMissingAfterInitialization,
 }
@@ -51,6 +68,53 @@ impl SyncAction {
             Self::PullRemote => "pull-remote",
             Self::PublishLocal => "publish-local",
             Self::PreserveIncoming => "preserve-incoming",
+        }
+    }
+}
+
+impl SyncExecutionReport {
+    pub fn adopted() -> Self {
+        Self {
+            kind: SyncReportKind::Adopted,
+            action: SyncAction::AdoptRemote,
+            message: "local state adopted existing remote canonical revision".to_string(),
+            path: None,
+        }
+    }
+
+    pub fn noop() -> Self {
+        Self {
+            kind: SyncReportKind::Noop,
+            action: SyncAction::Noop,
+            message: "local and remote are already synced".to_string(),
+            path: None,
+        }
+    }
+
+    pub fn pulled() -> Self {
+        Self {
+            kind: SyncReportKind::Pulled,
+            action: SyncAction::PullRemote,
+            message: "pulled remote canonical database into local file".to_string(),
+            path: None,
+        }
+    }
+
+    pub fn published(action: SyncAction) -> Self {
+        Self {
+            kind: SyncReportKind::Published,
+            action,
+            message: "published local database as remote canonical".to_string(),
+            path: None,
+        }
+    }
+
+    pub fn preserved_incoming(path: std::path::PathBuf) -> Self {
+        Self {
+            kind: SyncReportKind::IncomingPreserved,
+            action: SyncAction::PreserveIncoming,
+            message: "preserved divergent local database for desktop merge".to_string(),
+            path: Some(path),
         }
     }
 }
