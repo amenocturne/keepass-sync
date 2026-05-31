@@ -26,6 +26,10 @@ fmt:
 lint:
     cargo clippy -- -D warnings
 
+# Build Android app
+mobile-build:
+    gradle -p mobile/android :app:assembleDebug
+
 # Remove build artifacts
 clean:
     cargo clean

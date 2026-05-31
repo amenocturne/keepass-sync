@@ -28,6 +28,7 @@ just run --help
 - `src/main.rs` - CLI boundary.
 - `tests/keepass_sync.rs` - integration tests using real `keepassxc-cli`
   databases.
+- `mobile/android/` - Kotlin Android transport client.
 
 ## Key Patterns
 

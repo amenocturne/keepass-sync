@@ -73,3 +73,5 @@ wrapped by a macOS LaunchAgent.
 
 The Android app is intentionally separate Kotlin code. It should implement the
 same manifest/base-revision protocol, but it should not merge KDBX files.
+
+Android client source lives in `mobile/android`.
