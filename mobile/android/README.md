@@ -21,3 +21,20 @@ just mobile-build
 
 `ANDROID_HOME` defaults to `/opt/homebrew/share/android-commandlinetools`.
 Override `ANDROID_HOME` if the SDK lives elsewhere.
+
+## Release APK
+
+Generate a local release key/config once:
+
+```bash
+just mobile-release-key
+```
+
+Build the signed release APK:
+
+```bash
+just mobile-release
+```
+
+The generated keystore and `keystore.properties` are ignored by git. Back them
+up; future APK updates require the same key.
