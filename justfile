@@ -50,7 +50,8 @@ mobile-release:
     set -euo pipefail
     android_home="${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}"
     ANDROID_HOME="$android_home" mobile/android/gradlew --project-dir mobile/android :app:assembleRelease
-    version="$(awk -F'"' '/versionName =/ { print $2; exit }' mobile/android/app/build.gradle.kts)"
+    version="${KEEPASS_SYNC_VERSION_NAME:-0.1.0}"
+    version="${version#v}"
     apk="mobile/android/dist/keepass-sync-$version.apk"
     signer="$(find "$android_home/build-tools" -type f -name apksigner | sort | tail -n 1)"
     test -n "$signer"

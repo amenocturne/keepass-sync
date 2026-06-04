@@ -24,6 +24,23 @@ val releaseSigningConfigured =
     listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword)
         .all { !it.isNullOrBlank() }
 
+fun semverVersionCode(version: String): Int {
+    val core = version.removePrefix("v").substringBefore("-")
+    val parts = core.split(".").map { it.toIntOrNull() ?: 0 }
+    val major = parts.getOrElse(0) { 0 }
+    val minor = parts.getOrElse(1) { 0 }
+    val patch = parts.getOrElse(2) { 0 }
+    return major * 10_000 + minor * 100 + patch
+}
+
+val releaseVersionName =
+    providers.environmentVariable("KEEPASS_SYNC_VERSION_NAME").orNull
+        ?.removePrefix("v")
+        ?: "0.1.0"
+val releaseVersionCode =
+    providers.environmentVariable("KEEPASS_SYNC_VERSION_CODE").orNull?.toInt()
+        ?: semverVersionCode(releaseVersionName)
+
 android {
     namespace = "space.amenocturne.keepasssync"
     compileSdk = 36
@@ -32,8 +49,8 @@ android {
         applicationId = "space.amenocturne.keepasssync"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = releaseVersionCode
+        versionName = releaseVersionName
     }
 
     signingConfigs {

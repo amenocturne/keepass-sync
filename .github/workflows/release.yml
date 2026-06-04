@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set release version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          IFS=. read -r major minor patch <<< "$version"
+          echo "KEEPASS_SYNC_VERSION_NAME=$version" >> "$GITHUB_ENV"
+          echo "KEEPASS_SYNC_VERSION_CODE=$((major * 10000 + minor * 100 + patch))" >> "$GITHUB_ENV"
+
+      - name: Restore Android release keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64"
+          mkdir -p mobile/android/keystores
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > mobile/android/keystores/keepass-sync-release.jks
+
+      - name: Build signed release APK
+        env:
+          KEEPASS_SYNC_RELEASE_STORE_FILE: keystores/keepass-sync-release.jks
+          KEEPASS_SYNC_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEEPASS_SYNC_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEEPASS_SYNC_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: mobile/android/gradlew --project-dir mobile/android :app:assembleRelease
+
+      - name: Package APK
+        run: |
+          mkdir -p dist
+          cp mobile/android/app/build/outputs/apk/release/app-release.apk "dist/keepass-sync-${KEEPASS_SYNC_VERSION_NAME}.apk"
+          sha256sum "dist/keepass-sync-${KEEPASS_SYNC_VERSION_NAME}.apk" > "dist/keepass-sync-${KEEPASS_SYNC_VERSION_NAME}.apk.sha256"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/keepass-sync-${{ env.KEEPASS_SYNC_VERSION_NAME }}.apk
+            dist/keepass-sync-${{ env.KEEPASS_SYNC_VERSION_NAME }}.apk.sha256
+          generate_release_notes: true

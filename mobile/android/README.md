@@ -38,3 +38,29 @@ just mobile-release
 
 The generated keystore and `keystore.properties` are ignored by git. Back them
 up; future APK updates require the same key.
+
+Release versions follow git tags. Push a semver tag like `v0.1.1` to build and
+publish a GitHub release automatically.
+
+Required GitHub secrets:
+
+- `ANDROID_KEYSTORE_BASE64`
+- `ANDROID_KEYSTORE_PASSWORD`
+- `ANDROID_KEY_ALIAS`
+- `ANDROID_KEY_PASSWORD`
+
+Populate them from the local release key:
+
+```bash
+gh secret set ANDROID_KEYSTORE_BASE64 --repo amenocturne/keepass-sync \
+  --body "$(base64 -i mobile/android/keystores/keepass-sync-release.jks)"
+
+gh secret set ANDROID_KEYSTORE_PASSWORD --repo amenocturne/keepass-sync \
+  --body "$(awk -F= '$1 == "storePassword" { print $2; exit }' mobile/android/keystore.properties)"
+
+gh secret set ANDROID_KEY_ALIAS --repo amenocturne/keepass-sync \
+  --body "$(awk -F= '$1 == "keyAlias" { print $2; exit }' mobile/android/keystore.properties)"
+
+gh secret set ANDROID_KEY_PASSWORD --repo amenocturne/keepass-sync \
+  --body "$(awk -F= '$1 == "keyPassword" { print $2; exit }' mobile/android/keystore.properties)"
+```
