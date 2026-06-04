@@ -34,6 +34,10 @@ pub enum RemoteError {
         manifest: Revision,
         actual: Revision,
     },
+    BaseRevisionMismatch {
+        expected: Option<Revision>,
+        actual: Option<Revision>,
+    },
     LockHeld(PathBuf),
     NoCanonicalDatabase,
 }
@@ -178,6 +182,78 @@ impl FilesystemRemote {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn current_revision(&self) -> Result<Option<Revision>, RemoteError> {
+        self.remote_revision()
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, RemoteError> {
+        if self.remote_revision()?.is_none() {
+            return Err(RemoteError::NoCanonicalDatabase);
+        }
+        fs::read(self.canonical_db()).map_err(RemoteError::Io)
+    }
+
+    pub fn publish_bytes_if_base_matches(
+        &self,
+        bytes: &[u8],
+        base_revision: Option<&Revision>,
+        revision: &Revision,
+        device_id: &str,
+    ) -> Result<Manifest, RemoteError> {
+        self.ensure_layout()?;
+        self.with_lock(|| {
+            let actual_base = self.remote_revision()?;
+            if actual_base.as_ref() != base_revision {
+                return Err(RemoteError::BaseRevisionMismatch {
+                    expected: base_revision.cloned(),
+                    actual: actual_base,
+                });
+            }
+
+            let tmp_path = self.root.join(format!(
+                ".upload-{}-{}.kdbx",
+                sanitize_path_component(device_id),
+                timestamp()
+            ));
+            fs::write(&tmp_path, bytes).map_err(RemoteError::Io)?;
+            let result = self.publish(&tmp_path, revision, device_id);
+            let cleanup = fs::remove_file(&tmp_path).map_err(RemoteError::Io);
+
+            result?;
+            cleanup?;
+            Ok(Manifest::new(
+                revision.clone(),
+                timestamp(),
+                device_id.to_string(),
+            ))
+        })
+    }
+
+    pub fn preserve_incoming_bytes(
+        &self,
+        bytes: &[u8],
+        revision: &Revision,
+        device_id: &str,
+    ) -> Result<PathBuf, RemoteError> {
+        self.ensure_layout()?;
+        self.with_lock(|| {
+            let device_dir = self.incoming_dir().join(sanitize_path_component(device_id));
+            fs::create_dir_all(&device_dir).map_err(RemoteError::Io)?;
+            let incoming_path = device_dir.join(format!("{}.kdbx", safe_revision(revision)));
+            let tmp_path = incoming_path.with_extension("kdbx.tmp");
+            fs::write(&tmp_path, bytes).map_err(RemoteError::Io)?;
+            let actual = Revision::from_file(&tmp_path).map_err(RemoteError::Io)?;
+            if &actual != revision {
+                return Err(RemoteError::ManifestHashMismatch {
+                    manifest: revision.clone(),
+                    actual,
+                });
+            }
+            fs::rename(tmp_path, &incoming_path).map_err(RemoteError::Io)?;
+            Ok(incoming_path)
+        })
     }
 
     fn publish(
@@ -379,6 +455,14 @@ impl std::fmt::Display for RemoteError {
                     "manifest revision {manifest} does not match canonical database hash {actual}"
                 )
             }
+            Self::BaseRevisionMismatch { expected, actual } => {
+                write!(
+                    formatter,
+                    "remote base revision changed: expected {}, got {}",
+                    display_optional_revision(expected),
+                    display_optional_revision(actual)
+                )
+            }
             Self::LockHeld(path) => {
                 write!(formatter, "remote lock is already held: {}", path.display())
             }
@@ -400,6 +484,34 @@ fn timestamp() -> String {
 
 fn safe_revision(revision: &Revision) -> String {
     revision.as_str().replace(':', "-")
+}
+
+fn sanitize_path_component(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+
+    if sanitized.is_empty() {
+        "unknown-device".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn display_optional_revision(revision: &Option<Revision>) -> String {
+    revision
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "none".to_string())
 }
 
 #[cfg(test)]
@@ -485,5 +597,56 @@ mod tests {
             Revision::from_file(remote_root.join("canonical/passwords.kdbx")).unwrap(),
             Revision::from_bytes(b"android-change")
         );
+    }
+
+    #[test]
+    fn publishes_bytes_when_base_matches() {
+        let dir = tempdir().unwrap();
+        let remote = FilesystemRemote::new(dir.path().join("remote"));
+        let revision = Revision::from_bytes(b"db-a");
+
+        let manifest = remote
+            .publish_bytes_if_base_matches(b"db-a", None, &revision, "android")
+            .unwrap();
+
+        assert_eq!(manifest.revision, revision);
+        assert_eq!(remote.current_revision().unwrap(), Some(revision));
+        assert_eq!(remote.canonical_bytes().unwrap(), b"db-a");
+    }
+
+    #[test]
+    fn rejects_byte_publish_when_base_is_stale() {
+        let dir = tempdir().unwrap();
+        let remote = FilesystemRemote::new(dir.path().join("remote"));
+        let first = Revision::from_bytes(b"db-a");
+        let second = Revision::from_bytes(b"db-b");
+        let stale = Revision::from_bytes(b"stale");
+
+        remote
+            .publish_bytes_if_base_matches(b"db-a", None, &first, "mac")
+            .unwrap();
+        let error = remote
+            .publish_bytes_if_base_matches(b"db-b", Some(&stale), &second, "android")
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            super::RemoteError::BaseRevisionMismatch { .. }
+        ));
+        assert_eq!(remote.canonical_bytes().unwrap(), b"db-a");
+    }
+
+    #[test]
+    fn preserves_incoming_bytes() {
+        let dir = tempdir().unwrap();
+        let remote = FilesystemRemote::new(dir.path().join("remote"));
+        let revision = Revision::from_bytes(b"android-change");
+
+        let path = remote
+            .preserve_incoming_bytes(b"android-change", &revision, "Pixel 8")
+            .unwrap();
+
+        assert_eq!(fs::read(path).unwrap(), b"android-change");
+        assert_eq!(remote.incoming_databases().unwrap().len(), 1);
     }
 }

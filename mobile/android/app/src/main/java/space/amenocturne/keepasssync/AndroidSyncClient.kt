@@ -2,7 +2,6 @@ package space.amenocturne.keepasssync
 
 import android.content.ContentResolver
 import android.net.Uri
-import java.time.Instant
 
 class AndroidSyncClient(
     private val resolver: ContentResolver,
@@ -10,11 +9,10 @@ class AndroidSyncClient(
 ) {
     fun sync(): SyncResult {
         val localUri = prefs.localDbUri ?: error("choose a local KDBX file first")
-        val remoteUri = prefs.remoteRootUri ?: error("choose a remote root folder first")
-        val remote = DocumentTreeRemote(resolver, remoteUri)
+        val remote = HttpRemote(prefs.endpointUrl, prefs.authToken)
         val localBytes = readLocal(localUri)
         val localRevision = Revision.fromBytes(localBytes)
-        val remoteRevision = remoteRevision(remote)
+        val remoteRevision = remote.manifest()?.revision
 
         val action = decideSync(
             SyncInputs(
@@ -27,7 +25,15 @@ class AndroidSyncClient(
         return when (action) {
             SyncAction.InitializeRemote,
             SyncAction.PublishLocal -> {
-                publish(remote, localBytes, localRevision)
+                val manifest = remote.publish(
+                    bytes = localBytes,
+                    revision = localRevision,
+                    baseRevision = prefs.baseRevision,
+                    deviceId = prefs.deviceId,
+                )
+                require(manifest.revision == localRevision) {
+                    "server manifest revision ${manifest.revision} did not match uploaded revision $localRevision"
+                }
                 prefs.baseRevision = localRevision
                 SyncResult(action, "Published local database as canonical.")
             }
@@ -41,41 +47,17 @@ class AndroidSyncClient(
                 SyncResult(action, "Already synced.")
 
             SyncAction.PullRemote -> {
-                val canonical = remote.read(CANONICAL_DB) ?: error("remote canonical database is missing")
+                val canonical = remote.canonical()
                 writeLocal(localUri, canonical)
                 prefs.baseRevision = Revision.fromBytes(canonical)
                 SyncResult(action, "Pulled remote canonical database.")
             }
 
             SyncAction.PreserveIncoming -> {
-                val incomingPath = listOf("incoming", prefs.deviceId, "${localRevision.safeName()}.kdbx")
-                remote.write(incomingPath, localBytes)
+                remote.preserveIncoming(localBytes, localRevision, prefs.deviceId)
                 SyncResult(action, "Saved divergent local copy for desktop merge.")
             }
         }
-    }
-
-    private fun publish(remote: DocumentTreeRemote, bytes: ByteArray, revision: Revision) {
-        remote.write(CANONICAL_DB, bytes)
-        remote.write(
-            MANIFEST,
-            Manifest(
-                revision = revision,
-                updatedAt = Instant.now().toString(),
-                updatedBy = prefs.deviceId,
-            ).toJson().encodeToByteArray(),
-        )
-    }
-
-    private fun remoteRevision(remote: DocumentTreeRemote): Revision? {
-        val manifestBytes = remote.read(MANIFEST) ?: return null
-        val canonicalBytes = remote.read(CANONICAL_DB) ?: error("manifest exists but canonical database is missing")
-        val manifest = Manifest.parse(manifestBytes.decodeToString())
-        val actual = Revision.fromBytes(canonicalBytes)
-        require(manifest.revision == actual) {
-            "manifest revision ${manifest.revision} does not match canonical hash $actual"
-        }
-        return manifest.revision
     }
 
     private fun readLocal(uri: Uri): ByteArray =
@@ -87,10 +69,6 @@ class AndroidSyncClient(
             ?: error("failed to write local database")
     }
 
-    companion object {
-        private val CANONICAL_DB = listOf("canonical", "passwords.kdbx")
-        private val MANIFEST = listOf("canonical", "manifest.json")
-    }
 }
 
 data class SyncResult(

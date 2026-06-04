@@ -2,8 +2,8 @@ package space.amenocturne.keepasssync
 
 import android.app.Activity
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
+import android.text.InputType
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
@@ -14,8 +14,10 @@ import android.widget.TextView
 class MainActivity : Activity() {
     private lateinit var prefs: SyncPreferences
     private lateinit var deviceInput: EditText
+    private lateinit var endpointInput: EditText
+    private lateinit var tokenInput: EditText
     private lateinit var localLabel: TextView
-    private lateinit var remoteLabel: TextView
+    private lateinit var baseLabel: TextView
     private lateinit var status: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -34,7 +36,6 @@ class MainActivity : Activity() {
 
         when (requestCode) {
             REQUEST_LOCAL -> prefs.localDbUri = uri
-            REQUEST_REMOTE -> prefs.remoteRootUri = uri
         }
         refreshLabels()
     }
@@ -56,6 +57,22 @@ class MainActivity : Activity() {
         }
         root.addView(deviceInput)
 
+        endpointInput = EditText(this).apply {
+            hint = "Sync endpoint"
+            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            setText(prefs.endpointUrl)
+        }
+        root.addView(endpointInput)
+
+        tokenInput = EditText(this).apply {
+            hint = "Sync token"
+            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setText(prefs.authToken)
+        }
+        root.addView(tokenInput)
+
         root.addView(Button(this).apply {
             text = "Choose local KDBX"
             setOnClickListener { chooseLocalDb() }
@@ -63,12 +80,8 @@ class MainActivity : Activity() {
         localLabel = TextView(this)
         root.addView(localLabel)
 
-        root.addView(Button(this).apply {
-            text = "Choose remote folder"
-            setOnClickListener { chooseRemoteRoot() }
-        })
-        remoteLabel = TextView(this)
-        root.addView(remoteLabel)
+        baseLabel = TextView(this)
+        root.addView(baseLabel)
 
         root.addView(Button(this).apply {
             text = "Sync"
@@ -95,35 +108,26 @@ class MainActivity : Activity() {
         )
     }
 
-    private fun chooseRemoteRoot() {
-        startActivityForResult(
-            Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-            },
-            REQUEST_REMOTE,
-        )
-    }
-
     private fun runSync() {
         prefs.deviceId = deviceInput.text.toString().trim().ifBlank { "android" }
+        prefs.endpointUrl = endpointInput.text.toString().trim()
+        prefs.authToken = tokenInput.text.toString()
         status.text = "Syncing..."
         try {
             val result = AndroidSyncClient(contentResolver, prefs).sync()
+            refreshLabels()
             status.text = "${result.action}\n${result.message}"
         } catch (error: Throwable) {
             status.text = "Error: ${error.message}"
         }
-        refreshLabels()
     }
 
     private fun refreshLabels() {
         localLabel.text = "Local: ${prefs.localDbUri ?: "not selected"}"
-        remoteLabel.text = "Remote: ${prefs.remoteRootUri ?: "not selected"}"
-        status.text = "Base revision: ${prefs.baseRevision ?: "none"}"
+        baseLabel.text = "Base revision: ${prefs.baseRevision ?: "none"}"
     }
 
     companion object {
         private const val REQUEST_LOCAL = 1
-        private const val REQUEST_REMOTE = 2
     }
 }

@@ -9,9 +9,12 @@ same manifest/base-revision protocol as the Rust sync engine:
 - pull remote when local is unchanged
 - preserve local under `incoming/<device-id>/` when local and remote diverged
 
-Current backend: Android Storage Access Framework folder selected by the user.
-This is useful for validating the protocol and UI. Homelab SSH/SFTP transport
-should preserve the same sync rules when added.
+Current backend: bearer-token HTTP against the Rust homelab server. Configure
+the app with:
+
+- local KDBX file URI
+- sync endpoint, for example `https://passwords.example.internal`
+- sync token
 
 ## Build
 

@@ -48,6 +48,10 @@ just run watch \
   --remote-root ./server \
   --state ./device-state.json \
   --device macbook-pro
+just run serve \
+  --remote-root ./server \
+  --bind 127.0.0.1:8787 \
+  --token-file ./sync-token
 just run merge-incoming \
   --remote-root ./server \
   --device macbook-pro \
@@ -71,7 +75,13 @@ server/
 merged canonical database. `watch` is the Rust daemon substrate intended to be
 wrapped by a macOS LaunchAgent.
 
-The Android app is intentionally separate Kotlin code. It should implement the
-same manifest/base-revision protocol, but it should not merge KDBX files.
+`serve` exposes the same remote root over HTTP for homelab devices. It requires
+`Authorization: Bearer <token>` and uses compare-and-swap publishing so a client
+cannot overwrite a canonical database whose revision changed after the client's
+last sync decision.
+
+The Android app is intentionally separate Kotlin code. It implements the same
+manifest/base-revision protocol over the homelab HTTP endpoint, but it does not
+merge KDBX files.
 
 Android client source lives in `mobile/android`.

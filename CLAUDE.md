@@ -24,6 +24,7 @@ just run --help
 - `src/manifest.rs` - remote manifest format.
 - `src/local_state.rs` - per-device base revision metadata.
 - `src/remote_fs.rs` - filesystem-backed remote transaction implementation.
+- `src/http_server.rs` - bearer-token HTTP wrapper for homelab clients.
 - `src/keepassxc.rs` - KeePassXC CLI adapter for desktop merge.
 - `src/main.rs` - CLI boundary.
 - `tests/keepass_sync.rs` - integration tests using real `keepassxc-cli`
@@ -38,8 +39,8 @@ just run --help
   desktop merge.
 - Android transport must never overwrite canonical when remote revision differs
   from the device base revision.
-- Filesystem transport is the first concrete backend; SSH/SFTP should preserve
-  the same transaction semantics instead of changing sync rules.
+- Filesystem transport is the source of truth for transaction semantics; HTTP
+  serves the same remote root for homelab clients.
 - Packaged builds should bundle `keepassxc-cli` under
   `tools/keepassxc/bin/keepassxc-cli`. Do not rely on or overwrite a system
   KeePassXC install.

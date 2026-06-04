@@ -1,4 +1,7 @@
-use keepass_sync::{FilesystemRemote, Keepassxc, Manifest, Revision, SyncInputs, decide_sync};
+use keepass_sync::{
+    FilesystemRemote, HttpServerConfig, Keepassxc, Manifest, Revision, SyncInputs, decide_sync,
+    serve,
+};
 use std::env;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
@@ -26,6 +29,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
         "decide" => decide_command(&args[1..]),
         "sync" => sync_command(&args[1..]),
         "watch" => watch_command(&args[1..]),
+        "serve" => serve_command(&args[1..]),
         "merge-incoming" => merge_incoming_command(&args[1..]),
         "manifest" => manifest_command(&args[1..]),
         "doctor" => doctor_command(),
@@ -107,6 +111,19 @@ fn watch_command(args: &[String]) -> Result<(), String> {
             }
         }
     }
+}
+
+fn serve_command(args: &[String]) -> Result<(), String> {
+    let remote_root = required_value(args, "--remote-root")?;
+    let bind = optional_value(args, "--bind").unwrap_or_else(|| "127.0.0.1:8787".to_string());
+    let token = read_token(args)?;
+
+    serve(HttpServerConfig {
+        bind,
+        remote_root: PathBuf::from(remote_root),
+        token,
+    })
+    .map_err(|error| error.to_string())
 }
 
 fn merge_incoming_command(args: &[String]) -> Result<(), String> {
@@ -211,8 +228,24 @@ fn optional_value(args: &[String], flag: &str) -> Option<String> {
         .map(|window| window[1].clone())
 }
 
+fn read_token(args: &[String]) -> Result<String, String> {
+    if let Some(token) = optional_value(args, "--token") {
+        return Ok(token);
+    }
+
+    if let Some(path) = optional_value(args, "--token-file") {
+        return std::fs::read_to_string(path)
+            .map(|token| token.trim_end_matches(['\r', '\n']).to_string())
+            .map_err(|error| format!("failed to read token file: {error}"));
+    }
+
+    env::var("KEEPASS_SYNC_TOKEN")
+        .map(|token| token.trim_end_matches(['\r', '\n']).to_string())
+        .map_err(|_| "missing token; pass --token, --token-file, or KEEPASS_SYNC_TOKEN".to_string())
+}
+
 fn print_help() {
     println!(
-        "keepass-sync\n\nCommands:\n  hash <path>\n  decide --local REV [--base REV] [--remote REV]\n  sync --local DB --remote-root DIR --state STATE --device ID\n  watch --local DB --remote-root DIR --state STATE --device ID [--interval-seconds N]\n  merge-incoming --remote-root DIR --device ID [--password-file FILE]\n  manifest read <path>\n  doctor"
+        "keepass-sync\n\nCommands:\n  hash <path>\n  decide --local REV [--base REV] [--remote REV]\n  sync --local DB --remote-root DIR --state STATE --device ID\n  watch --local DB --remote-root DIR --state STATE --device ID [--interval-seconds N]\n  serve --remote-root DIR [--bind HOST:PORT] [--token TOKEN | --token-file FILE]\n  merge-incoming --remote-root DIR --device ID [--password-file FILE]\n  manifest read <path>\n  doctor"
     );
 }
