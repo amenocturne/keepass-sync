@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
@@ -150,7 +151,7 @@ class MainActivity : Activity() {
                 val result = AndroidSyncClient(contentResolver, prefs).sync()
                 runOnUiThread {
                     refreshLabels()
-                    status.text = "${result.action}\n${result.message}"
+                    status.text = result.toDisplayText()
                     syncButton.isEnabled = true
                 }
             } catch (error: Throwable) {
@@ -163,9 +164,39 @@ class MainActivity : Activity() {
     }
 
     private fun refreshLabels() {
-        localLabel.text = "Local: ${prefs.localDbUri ?: "not selected"}"
-        baseLabel.text = "Base revision: ${prefs.baseRevision ?: "none"}"
+        localLabel.text = "Database: ${prefs.localDbUri?.displayName() ?: "not selected"}"
+        baseLabel.text = if (prefs.baseRevision == null) {
+            "This phone has not completed a sync yet."
+        } else {
+            "This phone has a saved sync baseline."
+        }
     }
+
+    private fun SyncResult.toDisplayText(): String =
+        when (action) {
+            SyncAction.InitializeRemote,
+            SyncAction.PublishLocal ->
+                "Synced\nYour phone database is now the shared copy."
+
+            SyncAction.AdoptRemote ->
+                "Connected\nThis phone already matches the shared copy."
+
+            SyncAction.Noop ->
+                "Already synced\nNo changes to send or download."
+
+            SyncAction.PullRemote ->
+                "Updated\nDownloaded the latest shared database."
+
+            SyncAction.PreserveIncoming ->
+                "Needs desktop merge\nYour phone copy was kept safe. Open KeePass Sync on the desktop to merge it."
+        }
+
+    private fun Uri.displayName(): String =
+        lastPathSegment
+            ?.substringAfterLast('/')
+            ?.substringAfterLast(':')
+            ?.ifBlank { null }
+            ?: "selected"
 
     private fun configureWindow() {
         requestWindowFeature(Window.FEATURE_NO_TITLE)
