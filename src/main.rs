@@ -389,8 +389,11 @@ fn read_token(args: &[String], config: &Config) -> Result<String, String> {
 
 fn default_config_path() -> Option<String> {
     env::var("KEEPASS_SYNC_CONFIG").ok().or_else(|| {
-        let home = env::var("HOME").ok()?;
-        let path = PathBuf::from(home).join("Vault/Passwords/config.json");
+        let path = env::var("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|_| env::var("HOME").map(|home| PathBuf::from(home).join(".config")))
+            .ok()?
+            .join("keepass-sync/config.json");
         path.exists().then(|| path.display().to_string())
     })
 }
