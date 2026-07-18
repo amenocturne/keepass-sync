@@ -16,12 +16,14 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import kotlin.concurrent.thread
 
 class MainActivity : Activity() {
     private lateinit var prefs: SyncPreferences
     private lateinit var deviceInput: EditText
     private lateinit var endpointInput: EditText
     private lateinit var tokenInput: EditText
+    private lateinit var syncButton: Button
     private lateinit var localLabel: TextView
     private lateinit var baseLabel: TextView
     private lateinit var status: TextView
@@ -96,11 +98,12 @@ class MainActivity : Activity() {
         baseLabel = TextView(this).apply { styleMetaText() }
         root.addView(baseLabel, labelParams())
 
-        root.addView(Button(this).apply {
+        syncButton = Button(this).apply {
             text = "Sync"
             stylePrimaryButton()
             setOnClickListener { runSync() }
-        }, buttonParams())
+        }
+        root.addView(syncButton, buttonParams())
 
         status = TextView(this).apply {
             textSize = 16f
@@ -140,12 +143,22 @@ class MainActivity : Activity() {
         prefs.endpointUrl = endpointInput.text.toString().trim()
         prefs.authToken = tokenInput.text.toString()
         status.text = "Syncing..."
-        try {
-            val result = AndroidSyncClient(contentResolver, prefs).sync()
-            refreshLabels()
-            status.text = "${result.action}\n${result.message}"
-        } catch (error: Throwable) {
-            status.text = "Error: ${error.message}"
+        syncButton.isEnabled = false
+
+        thread(name = "keepass-sync") {
+            try {
+                val result = AndroidSyncClient(contentResolver, prefs).sync()
+                runOnUiThread {
+                    refreshLabels()
+                    status.text = "${result.action}\n${result.message}"
+                    syncButton.isEnabled = true
+                }
+            } catch (error: Throwable) {
+                runOnUiThread {
+                    status.text = "Error: ${error.message ?: error::class.java.simpleName}"
+                    syncButton.isEnabled = true
+                }
+            }
         }
     }
 
