@@ -80,6 +80,36 @@ fn handle_request(
             ))?,
             Err(error) => return Err(error.into()),
         },
+        (Method::Get, "/incoming") => {
+            let mut incoming = Vec::new();
+            for database in remote.incoming_databases()? {
+                let revision = Revision::from_file(&database.path)?;
+                let size = database.path.metadata().map_err(RemoteError::Io)?.len();
+                incoming.push(IncomingListEntry {
+                    device_id: database.device_id,
+                    revision,
+                    size,
+                });
+            }
+            request.respond(json_response(
+                StatusCode(200),
+                &IncomingListResponse { incoming },
+            )?)?;
+        }
+        (Method::Get, path) if path.starts_with("/incoming/") => {
+            let Some((device_id, revision)) = parse_incoming_path(path) else {
+                request.respond(text_response(StatusCode(404), "not found\n"))?;
+                return Ok(());
+            };
+            let revision = Revision::parse(revision)?;
+            match remote.incoming_file(&device_id, &revision) {
+                Ok(bytes) => request.respond(bytes_response(StatusCode(200), bytes))?,
+                Err(RemoteError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+                    request.respond(text_response(StatusCode(404), "incoming not found\n"))?
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
         (Method::Put, "/canonical") => {
             let device_id = required_query(&target, "device_id")
                 .unwrap_or_else(|| "unknown-device".to_string());
@@ -138,6 +168,18 @@ struct ConflictResponse {
 #[derive(Debug, Serialize)]
 struct IncomingResponse {
     path: String,
+}
+
+#[derive(Debug, Serialize)]
+struct IncomingListResponse {
+    incoming: Vec<IncomingListEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct IncomingListEntry {
+    device_id: String,
+    revision: Revision,
+    size: u64,
 }
 
 impl RequestTarget {

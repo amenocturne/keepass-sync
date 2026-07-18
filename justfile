@@ -10,6 +10,10 @@ build mode="dev":
         cargo build; \
     fi
 
+# Install the CLI locally
+install:
+    cargo install --path . --locked
+
 # Run the CLI
 run *args:
     cargo run -- {{args}}

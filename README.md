@@ -52,6 +52,10 @@ just run serve \
   --remote-root ./server \
   --bind 127.0.0.1:8787 \
   --token-file ./sync-token
+just run pull-incoming \
+  --remote-root ./server \
+  --endpoint https://passwords.example.internal \
+  --token-file ./sync-token
 just run merge-incoming \
   --remote-root ./server \
   --device macbook-pro \

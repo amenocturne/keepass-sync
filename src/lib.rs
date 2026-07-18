@@ -10,7 +10,7 @@ pub use http_server::{HttpServerConfig, HttpServerError, serve};
 pub use keepassxc::{KeepassMerge, Keepassxc};
 pub use local_state::LocalState;
 pub use manifest::Manifest;
-pub use remote_fs::{FilesystemRemote, IncomingDatabase, RemoteError, SyncOutcome};
+pub use remote_fs::{FilesystemRemote, IncomingDatabase, IncomingFile, RemoteError, SyncOutcome};
 pub use revision::{Revision, RevisionError};
 pub use sync::{
     SyncAction, SyncExecutionReport, SyncInputs, SyncProblem, SyncReportKind, decide_sync,

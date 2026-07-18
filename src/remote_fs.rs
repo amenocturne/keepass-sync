@@ -17,6 +17,13 @@ pub struct IncomingDatabase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IncomingFile {
+    pub device_id: String,
+    pub revision: Revision,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncOutcome {
     pub report: SyncExecutionReport,
     pub local_revision: Revision,
@@ -178,6 +185,34 @@ impl FilesystemRemote {
         }
         databases.sort_by(|left, right| left.path.cmp(&right.path));
         Ok(databases)
+    }
+
+    pub fn incoming_file(
+        &self,
+        device_id: &str,
+        revision: &Revision,
+    ) -> Result<Vec<u8>, RemoteError> {
+        let path = self
+            .incoming_dir()
+            .join(sanitize_path_component(device_id))
+            .join(format!("{}.kdbx", safe_revision(revision)));
+        fs::read(path).map_err(RemoteError::Io)
+    }
+
+    pub fn mirror_incoming_files(
+        &self,
+        files: &[IncomingFile],
+    ) -> Result<Vec<PathBuf>, RemoteError> {
+        self.ensure_layout()?;
+        let mut mirrored = Vec::new();
+
+        for file in files {
+            let path =
+                self.preserve_incoming_bytes(&file.bytes, &file.revision, &file.device_id)?;
+            mirrored.push(path);
+        }
+
+        Ok(mirrored)
     }
 
     pub fn root(&self) -> &Path {
@@ -517,7 +552,7 @@ fn display_optional_revision(revision: &Option<Revision>) -> String {
 #[cfg(test)]
 mod tests {
     use super::FilesystemRemote;
-    use crate::{LocalState, Revision, SyncReportKind};
+    use crate::{IncomingFile, LocalState, Revision, SyncReportKind};
     use std::fs;
     use tempfile::tempdir;
 
@@ -634,6 +669,30 @@ mod tests {
             super::RemoteError::BaseRevisionMismatch { .. }
         ));
         assert_eq!(remote.canonical_bytes().unwrap(), b"db-a");
+    }
+
+    #[test]
+    fn mirrors_incoming_files_with_revision_validation() {
+        let dir = tempdir().unwrap();
+        let remote = FilesystemRemote::new(dir.path().join("remote"));
+        let revision = Revision::from_bytes(b"phone-db");
+
+        let mirrored = remote
+            .mirror_incoming_files(&[IncomingFile {
+                device_id: "pixel-7".to_string(),
+                revision: revision.clone(),
+                bytes: b"phone-db".to_vec(),
+            }])
+            .unwrap();
+
+        assert_eq!(mirrored.len(), 1);
+        assert_eq!(fs::read(&mirrored[0]).unwrap(), b"phone-db");
+        assert_eq!(remote.incoming_databases().unwrap().len(), 1);
+        assert_eq!(
+            mirrored[0],
+            dir.path()
+                .join("remote/incoming/pixel-7/sha256-e37358ad8a0d4c40afd1e277f43145a84aa538edd3fbec1620043e02cab58e63.kdbx")
+        );
     }
 
     #[test]

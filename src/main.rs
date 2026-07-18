@@ -1,10 +1,12 @@
 use keepass_sync::{
-    FilesystemRemote, HttpServerConfig, Keepassxc, Manifest, Revision, SyncInputs, decide_sync,
-    serve,
+    FilesystemRemote, HttpServerConfig, IncomingFile, Keepassxc, Manifest, Revision, SyncInputs,
+    decide_sync, serve,
 };
+use serde::Deserialize;
 use std::env;
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, Stdio};
 use std::thread;
 use std::time::Duration;
 
@@ -30,6 +32,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
         "sync" => sync_command(&args[1..]),
         "watch" => watch_command(&args[1..]),
         "serve" => serve_command(&args[1..]),
+        "pull-incoming" => pull_incoming_command(&args[1..]),
         "merge-incoming" => merge_incoming_command(&args[1..]),
         "manifest" => manifest_command(&args[1..]),
         "doctor" => doctor_command(),
@@ -124,6 +127,74 @@ fn serve_command(args: &[String]) -> Result<(), String> {
         token,
     })
     .map_err(|error| error.to_string())
+}
+
+#[derive(Debug, Deserialize)]
+struct IncomingListResponse {
+    incoming: Vec<IncomingListEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IncomingListEntry {
+    device_id: String,
+    revision: Revision,
+    size: u64,
+}
+
+fn pull_incoming_command(args: &[String]) -> Result<(), String> {
+    let remote_root = required_value(args, "--remote-root")?;
+    let endpoint = required_value(args, "--endpoint")?;
+    let token = read_token(args)?;
+    let endpoint = endpoint.trim().trim_end_matches('/');
+    if !(endpoint.starts_with("http://") || endpoint.starts_with("https://")) {
+        return Err("sync endpoint must start with http:// or https://".to_string());
+    }
+
+    let list_url = format!("{endpoint}/incoming");
+    let response = http_get(&list_url, &token)?;
+    let incoming: IncomingListResponse = serde_json::from_slice(&response)
+        .map_err(|error| format!("failed to parse incoming list: {error}"))?;
+
+    let mut files = Vec::new();
+    for entry in incoming.incoming {
+        let file_url = format!(
+            "{endpoint}/incoming/{}/{}",
+            url_encode(&entry.device_id),
+            url_encode(entry.revision.as_str())
+        );
+        let bytes = http_get(&file_url, &token)?;
+        let actual = Revision::from_bytes(&bytes);
+        if actual != entry.revision {
+            return Err(format!(
+                "downloaded incoming revision mismatch for {}: expected {}, got {}",
+                entry.device_id, entry.revision, actual
+            ));
+        }
+        if bytes.len() as u64 != entry.size {
+            return Err(format!(
+                "downloaded incoming size mismatch for {} {}: expected {}, got {}",
+                entry.device_id,
+                entry.revision,
+                entry.size,
+                bytes.len()
+            ));
+        }
+        files.push(IncomingFile {
+            device_id: entry.device_id,
+            revision: entry.revision,
+            bytes,
+        });
+    }
+
+    let mirrored = FilesystemRemote::new(remote_root)
+        .mirror_incoming_files(&files)
+        .map_err(|error| error.to_string())?;
+
+    println!("pulled: {}", mirrored.len());
+    for path in mirrored {
+        println!("incoming: {}", path.display());
+    }
+    Ok(())
 }
 
 fn merge_incoming_command(args: &[String]) -> Result<(), String> {
@@ -244,8 +315,62 @@ fn read_token(args: &[String]) -> Result<String, String> {
         .map_err(|_| "missing token; pass --token, --token-file, or KEEPASS_SYNC_TOKEN".to_string())
 }
 
+fn http_get(url: &str, token: &str) -> Result<Vec<u8>, String> {
+    let config = format!(
+        "url = \"{}\"\nheader = \"Authorization: Bearer {}\"\nfail-with-body\nsilent\nshow-error\n",
+        curl_config_escape(url),
+        curl_config_escape(token)
+    );
+    let mut child = Command::new("curl")
+        .arg("--config")
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("failed to run curl: {error}"))?;
+
+    child
+        .stdin
+        .take()
+        .expect("curl stdin is piped")
+        .write_all(config.as_bytes())
+        .map_err(|error| format!("failed to write curl config: {error}"))?;
+
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("failed to read curl output: {error}"))?;
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Err(format!(
+            "HTTP request failed for {url}: {}{}",
+            stderr.trim(),
+            stdout.trim()
+        ))
+    }
+}
+
+fn curl_config_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn url_encode(value: &str) -> String {
+    value
+        .bytes()
+        .flat_map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                vec![byte as char]
+            }
+            _ => format!("%{byte:02X}").chars().collect(),
+        })
+        .collect()
+}
+
 fn print_help() {
     println!(
-        "keepass-sync\n\nCommands:\n  hash <path>\n  decide --local REV [--base REV] [--remote REV]\n  sync --local DB --remote-root DIR --state STATE --device ID\n  watch --local DB --remote-root DIR --state STATE --device ID [--interval-seconds N]\n  serve --remote-root DIR [--bind HOST:PORT] [--token TOKEN | --token-file FILE]\n  merge-incoming --remote-root DIR --device ID [--password-file FILE]\n  manifest read <path>\n  doctor"
+        "keepass-sync\n\nCommands:\n  hash <path>\n  decide --local REV [--base REV] [--remote REV]\n  sync --local DB --remote-root DIR --state STATE --device ID\n  watch --local DB --remote-root DIR --state STATE --device ID [--interval-seconds N]\n  serve --remote-root DIR [--bind HOST:PORT] [--token TOKEN | --token-file FILE]\n  pull-incoming --remote-root DIR --endpoint URL [--token TOKEN | --token-file FILE]\n  merge-incoming --remote-root DIR --device ID [--password-file FILE]\n  manifest read <path>\n  doctor"
     );
 }
