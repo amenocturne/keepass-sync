@@ -44,6 +44,45 @@ fn run(args: Vec<String>) -> Result<(), String> {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+struct Config {
+    local: Option<String>,
+    remote_root: Option<String>,
+    state: Option<String>,
+    device: Option<String>,
+    endpoint: Option<String>,
+    token_file: Option<String>,
+    bind: Option<String>,
+    watch_interval: Option<String>,
+    pull_interval: Option<String>,
+}
+
+impl Config {
+    fn from_args(args: &[String]) -> Result<Self, String> {
+        let Some(path) = optional_value(args, "--config").or_else(default_config_path) else {
+            return Ok(Self::default());
+        };
+        let contents = std::fs::read_to_string(&path)
+            .map_err(|error| format!("failed to read config {path}: {error}"))?;
+        serde_json::from_str(&contents)
+            .map_err(|error| format!("failed to parse config {path}: {error}"))
+    }
+
+    fn value(&self, args: &[String], flag: &str, field: Option<&String>) -> Option<String> {
+        optional_value(args, flag).or_else(|| field.cloned())
+    }
+
+    fn required_value(
+        &self,
+        args: &[String],
+        flag: &str,
+        field: Option<&String>,
+    ) -> Result<String, String> {
+        self.value(args, flag, field)
+            .ok_or_else(|| format!("missing required flag or config field: {flag}"))
+    }
+}
+
 #[derive(Debug, Clone)]
 struct SyncOptions {
     local: String,
@@ -54,11 +93,16 @@ struct SyncOptions {
 
 impl SyncOptions {
     fn from_args(args: &[String]) -> Result<Self, String> {
+        let config = Config::from_args(args)?;
         Ok(Self {
-            local: required_value(args, "--local")?,
-            remote_root: required_value(args, "--remote-root")?,
-            state: required_value(args, "--state")?,
-            device: required_value(args, "--device")?,
+            local: config.required_value(args, "--local", config.local.as_ref())?,
+            remote_root: config.required_value(
+                args,
+                "--remote-root",
+                config.remote_root.as_ref(),
+            )?,
+            state: config.required_value(args, "--state", config.state.as_ref())?,
+            device: config.required_value(args, "--device", config.device.as_ref())?,
         })
     }
 }
@@ -83,22 +127,41 @@ fn run_sync(options: &SyncOptions) -> Result<(), String> {
 }
 
 fn watch_command(args: &[String]) -> Result<(), String> {
+    let config = Config::from_args(args)?;
     let options = SyncOptions::from_args(args)?;
     let interval_seconds = optional_value(args, "--interval-seconds")
-        .map(|value| value.parse::<u64>())
+        .or(config.watch_interval.clone())
+        .map(parse_duration_seconds)
         .transpose()
         .map_err(|error| format!("invalid --interval-seconds: {error}"))?
         .unwrap_or(30);
     let interval = Duration::from_secs(interval_seconds);
+    let pull_interval = optional_value(args, "--pull-interval")
+        .or(config.pull_interval.clone())
+        .map(parse_duration_seconds)
+        .transpose()
+        .map_err(|error| format!("invalid --pull-interval: {error}"))?
+        .map(Duration::from_secs);
     let local = PathBuf::from(&options.local);
     let mut last_seen = std::fs::metadata(&local)
         .and_then(|metadata| metadata.modified())
         .map_err(|error| format!("failed to stat local database: {error}"))?;
+    let mut last_pull = std::time::Instant::now()
+        .checked_sub(pull_interval.unwrap_or(Duration::ZERO))
+        .unwrap_or_else(std::time::Instant::now);
 
     run_sync(&options)?;
 
     loop {
         thread::sleep(interval);
+        if let Some(pull_interval) = pull_interval
+            && last_pull.elapsed() >= pull_interval
+        {
+            last_pull = std::time::Instant::now();
+            if let Err(error) = run_pull_incoming(args, &config) {
+                eprintln!("watch: pull-incoming failed: {error}");
+            }
+        }
         let modified = match std::fs::metadata(&local).and_then(|metadata| metadata.modified()) {
             Ok(modified) => modified,
             Err(error) => {
@@ -117,9 +180,12 @@ fn watch_command(args: &[String]) -> Result<(), String> {
 }
 
 fn serve_command(args: &[String]) -> Result<(), String> {
-    let remote_root = required_value(args, "--remote-root")?;
-    let bind = optional_value(args, "--bind").unwrap_or_else(|| "127.0.0.1:8787".to_string());
-    let token = read_token(args)?;
+    let config = Config::from_args(args)?;
+    let remote_root = config.required_value(args, "--remote-root", config.remote_root.as_ref())?;
+    let bind = config
+        .value(args, "--bind", config.bind.as_ref())
+        .unwrap_or_else(|| "127.0.0.1:8787".to_string());
+    let token = read_token(args, &config)?;
 
     serve(HttpServerConfig {
         bind,
@@ -142,9 +208,14 @@ struct IncomingListEntry {
 }
 
 fn pull_incoming_command(args: &[String]) -> Result<(), String> {
-    let remote_root = required_value(args, "--remote-root")?;
-    let endpoint = required_value(args, "--endpoint")?;
-    let token = read_token(args)?;
+    let config = Config::from_args(args)?;
+    run_pull_incoming(args, &config)
+}
+
+fn run_pull_incoming(args: &[String], config: &Config) -> Result<(), String> {
+    let remote_root = config.required_value(args, "--remote-root", config.remote_root.as_ref())?;
+    let endpoint = config.required_value(args, "--endpoint", config.endpoint.as_ref())?;
+    let token = read_token(args, config)?;
     let endpoint = endpoint.trim().trim_end_matches('/');
     if !(endpoint.starts_with("http://") || endpoint.starts_with("https://")) {
         return Err("sync endpoint must start with http:// or https://".to_string());
@@ -198,8 +269,9 @@ fn pull_incoming_command(args: &[String]) -> Result<(), String> {
 }
 
 fn merge_incoming_command(args: &[String]) -> Result<(), String> {
-    let remote_root = required_value(args, "--remote-root")?;
-    let device = required_value(args, "--device")?;
+    let config = Config::from_args(args)?;
+    let remote_root = config.required_value(args, "--remote-root", config.remote_root.as_ref())?;
+    let device = config.required_value(args, "--device", config.device.as_ref())?;
     let password = optional_value(args, "--password-file")
         .map(std::fs::read_to_string)
         .transpose()
@@ -299,12 +371,12 @@ fn optional_value(args: &[String], flag: &str) -> Option<String> {
         .map(|window| window[1].clone())
 }
 
-fn read_token(args: &[String]) -> Result<String, String> {
+fn read_token(args: &[String], config: &Config) -> Result<String, String> {
     if let Some(token) = optional_value(args, "--token") {
         return Ok(token);
     }
 
-    if let Some(path) = optional_value(args, "--token-file") {
+    if let Some(path) = optional_value(args, "--token-file").or_else(|| config.token_file.clone()) {
         return std::fs::read_to_string(path)
             .map(|token| token.trim_end_matches(['\r', '\n']).to_string())
             .map_err(|error| format!("failed to read token file: {error}"));
@@ -313,6 +385,36 @@ fn read_token(args: &[String]) -> Result<String, String> {
     env::var("KEEPASS_SYNC_TOKEN")
         .map(|token| token.trim_end_matches(['\r', '\n']).to_string())
         .map_err(|_| "missing token; pass --token, --token-file, or KEEPASS_SYNC_TOKEN".to_string())
+}
+
+fn default_config_path() -> Option<String> {
+    env::var("KEEPASS_SYNC_CONFIG").ok().or_else(|| {
+        let home = env::var("HOME").ok()?;
+        let path = PathBuf::from(home).join("Vault/Passwords/config.json");
+        path.exists().then(|| path.display().to_string())
+    })
+}
+
+fn parse_duration_seconds(value: String) -> Result<u64, String> {
+    let trimmed = value.trim();
+    let (number, multiplier) = if let Some(number) = trimmed.strip_suffix("ms") {
+        let millis = number
+            .parse::<u64>()
+            .map_err(|error| format!("{trimmed}: {error}"))?;
+        return Ok((millis / 1000).max(1));
+    } else if let Some(number) = trimmed.strip_suffix('s') {
+        (number, 1)
+    } else if let Some(number) = trimmed.strip_suffix('m') {
+        (number, 60)
+    } else if let Some(number) = trimmed.strip_suffix('h') {
+        (number, 60 * 60)
+    } else {
+        (trimmed, 1)
+    };
+    let amount = number
+        .parse::<u64>()
+        .map_err(|error| format!("{trimmed}: {error}"))?;
+    Ok(amount.saturating_mul(multiplier))
 }
 
 fn http_get(url: &str, token: &str) -> Result<Vec<u8>, String> {
@@ -371,6 +473,6 @@ fn url_encode(value: &str) -> String {
 
 fn print_help() {
     println!(
-        "keepass-sync\n\nCommands:\n  hash <path>\n  decide --local REV [--base REV] [--remote REV]\n  sync --local DB --remote-root DIR --state STATE --device ID\n  watch --local DB --remote-root DIR --state STATE --device ID [--interval-seconds N]\n  serve --remote-root DIR [--bind HOST:PORT] [--token TOKEN | --token-file FILE]\n  pull-incoming --remote-root DIR --endpoint URL [--token TOKEN | --token-file FILE]\n  merge-incoming --remote-root DIR --device ID [--password-file FILE]\n  manifest read <path>\n  doctor"
+        "keepass-sync\n\nCommands:\n  hash <path>\n  decide --local REV [--base REV] [--remote REV]\n  sync [--config PATH] [--local DB --remote-root DIR --state STATE --device ID]\n  watch [--config PATH] [--local DB --remote-root DIR --state STATE --device ID] [--interval-seconds N] [--pull-interval N]\n  serve [--config PATH] [--remote-root DIR] [--bind HOST:PORT] [--token TOKEN | --token-file FILE]\n  pull-incoming [--config PATH] [--remote-root DIR --endpoint URL] [--token TOKEN | --token-file FILE]\n  merge-incoming [--config PATH] [--remote-root DIR --device ID] [--password-file FILE]\n  manifest read <path>\n  doctor"
     );
 }

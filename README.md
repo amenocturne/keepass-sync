@@ -33,6 +33,15 @@ The packaged app/installer should place the private KeePassXC CLI sidecar under
 
 ## Usage
 
+Commands read `--config PATH`, `KEEPASS_SYNC_CONFIG`, or
+`~/Vault/Passwords/config.json` when present. Config values can supply the
+usual local paths, endpoint, token file, and watch intervals so routine commands
+can be short:
+
+```bash
+keepass-sync pull-incoming
+```
+
 Filesystem-backed sync commands:
 
 ```bash
