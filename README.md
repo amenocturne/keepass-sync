@@ -42,6 +42,10 @@ can be short:
 keepass-sync pull-incoming
 ```
 
+Incoming conflicts are written beside the configured local database as
+`sync-conflict-<revision>.kdbx` files so the database folder contains only
+user-facing KeePass files.
+
 Filesystem-backed sync commands:
 
 ```bash
@@ -62,8 +66,8 @@ just run serve \
   --bind 127.0.0.1:8787 \
   --token-file ./sync-token
 just run pull-incoming \
-  --remote-root ./server \
   --endpoint https://passwords.example.internal \
+  --local ./passwords.kdbx \
   --token-file ./sync-token
 just run merge-incoming \
   --remote-root ./server \

@@ -49,6 +49,7 @@ struct Config {
     local: Option<String>,
     remote_root: Option<String>,
     state: Option<String>,
+    conflict_dir: Option<String>,
     device: Option<String>,
     endpoint: Option<String>,
     token_file: Option<String>,
@@ -213,7 +214,6 @@ fn pull_incoming_command(args: &[String]) -> Result<(), String> {
 }
 
 fn run_pull_incoming(args: &[String], config: &Config) -> Result<(), String> {
-    let remote_root = config.required_value(args, "--remote-root", config.remote_root.as_ref())?;
     let endpoint = config.required_value(args, "--endpoint", config.endpoint.as_ref())?;
     let token = read_token(args, config)?;
     let endpoint = endpoint.trim().trim_end_matches('/');
@@ -257,15 +257,70 @@ fn run_pull_incoming(args: &[String], config: &Config) -> Result<(), String> {
         });
     }
 
-    let mirrored = FilesystemRemote::new(remote_root)
-        .mirror_incoming_files(&files)
-        .map_err(|error| error.to_string())?;
+    let conflict_dir = conflict_dir(args, config)?;
+    let mirrored = write_conflict_files(&conflict_dir, &files)?;
 
     println!("pulled: {}", mirrored.len());
     for path in mirrored {
         println!("incoming: {}", path.display());
     }
     Ok(())
+}
+
+fn conflict_dir(args: &[String], config: &Config) -> Result<PathBuf, String> {
+    if let Some(path) = config.value(args, "--conflict-dir", config.conflict_dir.as_ref()) {
+        return Ok(PathBuf::from(path));
+    }
+
+    let local = config.required_value(args, "--local", config.local.as_ref())?;
+    PathBuf::from(local)
+        .parent()
+        .map(PathBuf::from)
+        .ok_or_else(|| "local database path has no parent directory".to_string())
+}
+
+fn write_conflict_files(
+    conflict_dir: &std::path::Path,
+    files: &[IncomingFile],
+) -> Result<Vec<PathBuf>, String> {
+    std::fs::create_dir_all(conflict_dir)
+        .map_err(|error| format!("failed to create conflict dir: {error}"))?;
+    let mut written = Vec::new();
+
+    for file in files {
+        let path = conflict_dir.join(format!(
+            "sync-conflict-{}.kdbx",
+            safe_revision(&file.revision)
+        ));
+        let tmp_path = path.with_extension("kdbx.tmp");
+        std::fs::write(&tmp_path, &file.bytes).map_err(|error| {
+            format!(
+                "failed to write conflict file {}: {error}",
+                tmp_path.display()
+            )
+        })?;
+        let actual = Revision::from_file(&tmp_path).map_err(|error| {
+            format!(
+                "failed to hash conflict file {}: {error}",
+                tmp_path.display()
+            )
+        })?;
+        if actual != file.revision {
+            return Err(format!(
+                "conflict file revision mismatch for {}: expected {}, got {}",
+                file.device_id, file.revision, actual
+            ));
+        }
+        std::fs::rename(&tmp_path, &path).map_err(|error| {
+            format!(
+                "failed to publish conflict file {}: {error}",
+                path.display()
+            )
+        })?;
+        written.push(path);
+    }
+
+    Ok(written)
 }
 
 fn merge_incoming_command(args: &[String]) -> Result<(), String> {
@@ -474,8 +529,55 @@ fn url_encode(value: &str) -> String {
         .collect()
 }
 
+fn safe_revision(revision: &Revision) -> String {
+    revision.as_str().replace(':', "-")
+}
+
 fn print_help() {
     println!(
-        "keepass-sync\n\nCommands:\n  hash <path>\n  decide --local REV [--base REV] [--remote REV]\n  sync [--config PATH] [--local DB --remote-root DIR --state STATE --device ID]\n  watch [--config PATH] [--local DB --remote-root DIR --state STATE --device ID] [--interval-seconds N] [--pull-interval N]\n  serve [--config PATH] [--remote-root DIR] [--bind HOST:PORT] [--token TOKEN | --token-file FILE]\n  pull-incoming [--config PATH] [--remote-root DIR --endpoint URL] [--token TOKEN | --token-file FILE]\n  merge-incoming [--config PATH] [--remote-root DIR --device ID] [--password-file FILE]\n  manifest read <path>\n  doctor"
+        "keepass-sync\n\nCommands:\n  hash <path>\n  decide --local REV [--base REV] [--remote REV]\n  sync [--config PATH] [--local DB --remote-root DIR --state STATE --device ID]\n  watch [--config PATH] [--local DB --remote-root DIR --state STATE --device ID] [--interval-seconds N] [--pull-interval N]\n  serve [--config PATH] [--remote-root DIR] [--bind HOST:PORT] [--token TOKEN | --token-file FILE]\n  pull-incoming [--config PATH] [--endpoint URL] [--local DB | --conflict-dir DIR] [--token TOKEN | --token-file FILE]\n  merge-incoming [--config PATH] [--remote-root DIR --device ID] [--password-file FILE]\n  manifest read <path>\n  doctor"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn conflict_dir_defaults_to_local_database_parent() {
+        let config = Config {
+            local: Some("/vault/passwords/Main.kdbx".to_string()),
+            ..Config::default()
+        };
+
+        assert_eq!(
+            conflict_dir(&[], &config).unwrap(),
+            PathBuf::from("/vault/passwords")
+        );
+    }
+
+    #[test]
+    fn writes_conflict_files_beside_local_database_with_safe_revision() {
+        let dir = tempdir().unwrap();
+        let bytes = b"phone database bytes".to_vec();
+        let revision = Revision::from_bytes(&bytes);
+
+        let written = write_conflict_files(
+            dir.path(),
+            &[IncomingFile {
+                device_id: "pixel-7".to_string(),
+                revision: revision.clone(),
+                bytes: bytes.clone(),
+            }],
+        )
+        .unwrap();
+
+        let expected = dir.path().join(format!(
+            "sync-conflict-{}.kdbx",
+            revision.as_str().replace(':', "-")
+        ));
+        assert_eq!(written, vec![expected.clone()]);
+        assert_eq!(std::fs::read(expected).unwrap(), bytes);
+    }
 }
